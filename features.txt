@@ -1,0 +1,25 @@
+PagesTogether: A social book reading platform
+
+"""This is MERN full-stack web development project."""
+
+
+### Features:
+
+1. **User Profile**
+2. **Virtual Bookshelf**
+3. **Book Discovery & Search**
+4. **Home Feed & Activity Stream**
+5. **Messaging**
+6. **Notifications**
+7. **Find Books (Giveaway & Exchange)**
+8. **Book Reading Community**
+9. **Social Features (Friends & Following)**
+10. **Community Events**
+
+Description of the features:
+1. User Profile: "This is the profile of the user. This page will contain the user profile picture with user information
+                 Name, email, bio. Then the user's favourite quote.
+2. Virtual BookShelf: This will be in the same page of the profile page. There will be 2 section, One is user's My BookShelf. A collection of books 
+                      user have. Each book will contain the necessary information. And can be able to add the book cover 
+                      from the internet through the copy-pasted link. Second there will be a Cureently reading section at the top of the 
+                      My BookShelf which books user id currently reading. These book can be added from the My BookShelf.
