@@ -1,9 +1,11 @@
 import React, { useEffect, useState, useRef } from 'react';
-import { userAPI, authAPI, bookAPI } from '../services/api';
+import { useParams } from 'react-router-dom';
+import { userAPI, authAPI, bookAPI, socialAPI } from '../services/api';
 import { useAuth } from '../contexts/AuthContext';
 import './UserProfile.css';
 
 const UserProfile = () => {
+  const { id: viewedUserId } = useParams();
   const { user, updateUser } = useAuth();
   const fileInputRef = useRef(null);
   const [isUploading, setIsUploading] = useState(false);
@@ -25,15 +27,38 @@ const UserProfile = () => {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const [saving, setSaving] = useState(false);
-  const [showProfileViewer, setShowProfileViewer] = useState(false);
 
   useEffect(() => {
+    // If viewing someone else's profile via /users/:id, fetch public profile
+    if (viewedUserId) {
+      (async () => {
+        try {
+          const res = await socialAPI.getUserProfile(viewedUserId);
+          const userData = res.data?.data?.user || {};
+          const profileData = {
+            username: userData.username || '',
+            email: userData.email || '',
+            bio: userData.bio || '',
+            favoriteQuote: userData.favoriteQuote || '',
+            profilePicture: userData.profilePicture || '',
+          };
+          setProfile(profileData);
+          setForm({ bio: profileData.bio, favoriteQuote: profileData.favoriteQuote });
+          setLoading(false);
+        } catch (e) {
+          setError('Failed to load profile');
+          setLoading(false);
+        }
+      })();
+      return;
+    }
+
     if (user) {
       const profileData = {
         username: user.username || '',
         email: user.email || '',
         bio: user.bio || '',
-        favoriteQuote: user.favoriteQuote || "The more that you read, the more things you will know. The more that you learn, the more places you'll go.",
+        favoriteQuote: user.favoriteQuote || '',
         profilePicture: user.profilePicture || '',
       };
       setProfile(profileData);
@@ -46,7 +71,7 @@ const UserProfile = () => {
     } else {
       loadProfile();
     }
-  }, [user]);
+  }, [user, viewedUserId]);
 
   const loadProfile = async () => {
     try {
@@ -56,7 +81,7 @@ const UserProfile = () => {
         username: userData.username || '',
         email: userData.email || '',
         bio: userData.bio || '',
-        favoriteQuote: userData.favoriteQuote || "The more that you read, the more things you will know. The more that you learn, the more places you'll go.",
+        favoriteQuote: userData.favoriteQuote || '',
         profilePicture: userData.profilePicture || '',
       };
       setProfile(profileData);
@@ -114,16 +139,12 @@ const UserProfile = () => {
   };
 
   const handleProfilePictureClick = () => {
-    // Always show profile viewer when clicking on the profile picture area
-    setShowProfileViewer(true);
-  };
-
-  const handleCameraClick = (e) => {
-    e.stopPropagation(); // Prevent triggering profile picture click
+    if (viewedUserId) return; // don't allow editing others' pictures
     fileInputRef.current?.click();
   };
 
   const handleFileChange = async (event) => {
+    if (viewedUserId) return; // not editable when viewing another user
     const file = event.target.files[0];
     if (!file) return;
 
@@ -156,7 +177,7 @@ const UserProfile = () => {
         setProfile(updatedProfile);
         
         // Refresh user data from server to get the updated profile picture
-        try {
+  try {
           const userResponse = await authAPI.getCurrentUser();
           if (updateUser && userResponse.data.user) {
             updateUser(userResponse.data.user);
@@ -191,35 +212,33 @@ const UserProfile = () => {
   return (
     <div className="profile-card">
       <div className="profile-header">
-        <div className="profile-avatar-wrapper">
-          <div className="profile-avatar" onClick={handleProfilePictureClick}>
-            <div className="avatar-container">
-              {profile.profilePicture ? (
-                <img src={profile.profilePicture} alt="Profile" />
-              ) : (
-                <div className="avatar-initials">
-                  {getInitials(profile.username)}
+        <div className="profile-avatar" onClick={handleProfilePictureClick}>
+          <div className="avatar-container">
+            {profile.profilePicture ? (
+              <img src={profile.profilePicture} alt="Profile" />
+            ) : (
+              <div className="avatar-initials">
+                {getInitials(profile.username)}
+              </div>
+            )}
+            
+            {/* Camera Icon Overlay */}
+            <div className="camera-overlay">
+              {isUploading ? (
+                <div className="uploading-spinner">
+                  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+                    <circle cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="2" strokeDasharray="32" strokeDashoffset="32">
+                      <animate attributeName="stroke-dashoffset" dur="2s" values="32;0" repeatCount="indefinite"/>
+                    </circle>
+                  </svg>
                 </div>
+              ) : (
+                <svg className="camera-icon" width="16" height="16" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+                  <path d="M23 19C23 19.5304 22.7893 20.0391 22.4142 20.4142C22.0391 20.7893 21.5304 21 21 21H3C2.46957 21 1.96086 20.7893 1.58579 20.4142C1.21071 20.0391 1 19.5304 1 19V8C1 7.46957 1.21071 6.96086 1.58579 6.58579C1.96086 6.21071 2.46957 6 3 6H7L9 3H15L17 6H21C21.5304 6 22.0391 6.21071 22.4142 6.58579C22.7893 6.96086 23 7.46957 23 8V19Z" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/>
+                  <circle cx="12" cy="13" r="4" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/>
+                </svg>
               )}
             </div>
-          </div>
-          
-          {/* Camera Icon Overlay - Outside profile-avatar */}
-          <div className="camera-overlay" onClick={handleCameraClick}>
-            {isUploading ? (
-              <div className="uploading-spinner">
-                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
-                  <circle cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="2" strokeDasharray="32" strokeDashoffset="32">
-                    <animate attributeName="stroke-dashoffset" dur="2s" values="32;0" repeatCount="indefinite"/>
-                  </circle>
-                </svg>
-              </div>
-            ) : (
-              <svg className="camera-icon" width="16" height="16" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
-                <path d="M23 19C23 19.5304 22.7893 20.0391 22.4142 20.4142C22.0391 20.7893 21.5304 21 21 21H3C2.46957 21 1.96086 20.7893 1.58579 20.4142C1.21071 20.0391 1 19.5304 1 19V8C1 7.46957 1.21071 6.96086 1.58579 6.58579C1.96086 6.21071 2.46957 6 3 6H7L9 3H15L17 6H21C21.5304 6 22.0391 6.21071 22.4142 6.58579C22.7893 6.96086 23 7.46957 23 8V19Z" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/>
-                <circle cx="12" cy="13" r="4" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/>
-              </svg>
-            )}
           </div>
           
           {/* Hidden File Input */}
@@ -288,6 +307,7 @@ const UserProfile = () => {
                 <p>{profile.bio}</p>
               </div>
             )}
+            {profile.favoriteQuote && (
             <div className="quote-section">
               <div className="quote-icon">
                 <svg width="50" height="50" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
@@ -300,28 +320,10 @@ const UserProfile = () => {
                 </blockquote>
               </div>
             </div>
+            )}
           </div>
         )}
       </div>
-
-      {/* Profile Picture Viewer Modal */}
-      {showProfileViewer && profile.profilePicture && (
-        <div className="profile-viewer-overlay" onClick={() => setShowProfileViewer(false)}>
-          <div className="profile-viewer-content" onClick={(e) => e.stopPropagation()}>
-            <button 
-              className="profile-viewer-close" 
-              onClick={() => setShowProfileViewer(false)}
-            >
-              ×
-            </button>
-            <img 
-              src={profile.profilePicture} 
-              alt="Profile" 
-              className="profile-viewer-image"
-            />
-          </div>
-        </div>
-      )}
     </div>
   );
 };

@@ -5,7 +5,8 @@ const crypto = require('crypto');
 
 // Generate JWT token
 const generateToken = (userId) => {
-  return jwt.sign({ userId }, process.env.JWT_SECRET, {
+  const JWT_SECRET = process.env.JWT_SECRET || 'dev-secret-key';
+  return jwt.sign({ userId }, JWT_SECRET, {
     expiresIn: process.env.NODE_ENV === 'production' ? '7d' : '30d'
   });
 };
@@ -19,8 +20,8 @@ const generateRefreshToken = () => {
 const setTokenCookie = (res, token) => {
   const cookieOptions = {
     httpOnly: true,
-    secure: process.env.NODE_ENV === 'production',
-    sameSite: 'strict',
+  secure: process.env.NODE_ENV === 'production',
+  sameSite: process.env.NODE_ENV === 'production' ? 'strict' : 'lax',
     maxAge: 7 * 24 * 60 * 60 * 1000 // 7 days
   };
   
@@ -207,6 +208,15 @@ exports.logout = async (req, res) => {
   }
 };
 
+// Helper to ensure absolute URL for images
+const makeAbsoluteUrl = (value, req) => {
+  if (!value) return value;
+  if (/^https?:\/\//i.test(value)) return value;
+  const path = value.startsWith('/') ? value : `/${value}`;
+  const baseUrl = `${req.protocol}://${req.get('host')}`;
+  return `${baseUrl}${path}`;
+};
+
 // Get current user
 exports.getCurrentUser = async (req, res) => {
   try {
@@ -221,13 +231,13 @@ exports.getCurrentUser = async (req, res) => {
       });
     }
 
-    res.json({
+  res.json({
       success: true,
       user: {
         id: user._id,
         username: user.username,
         email: user.email,
-        profilePicture: user.profilePicture,
+    profilePicture: makeAbsoluteUrl(user.profilePicture, req),
         bio: user.bio,
         favoriteQuote: user.favoriteQuote,
         authProvider: user.authProvider,
@@ -248,29 +258,42 @@ exports.getCurrentUser = async (req, res) => {
 // Refresh token
 exports.refreshToken = async (req, res) => {
   try {
-    const user = await User.findById(req.user.id);
-    
-    if (!user) {
-      return res.status(404).json({
-        success: false,
-        message: 'User not found'
-      });
+    // Accept token either from Authorization header or cookie; fallback to session
+    let token;
+    if (req.headers.authorization && req.headers.authorization.startsWith('Bearer')) {
+      token = req.headers.authorization.split(' ')[1];
+    } else if (req.cookies && req.cookies.token) {
+      token = req.cookies.token;
     }
 
-    // Generate new token
-    const token = generateToken(user._id);
-    setTokenCookie(res, token);
+    let userId = null;
+    if (token) {
+      try {
+  const JWT_SECRET = process.env.JWT_SECRET || 'dev-secret-key';
+  const decoded = jwt.verify(token, JWT_SECRET);
+        userId = decoded.userId;
+      } catch (_) {
+        // ignore and try session
+      }
+    }
+    if (!userId && req.session && req.session.userId) {
+      userId = req.session.userId;
+    }
+    if (!userId) {
+      return res.status(401).json({ success: false, message: 'Not authenticated' });
+    }
 
-    res.json({
-      success: true,
-      token
-    });
+    const user = await User.findById(userId);
+    if (!user) {
+      return res.status(404).json({ success: false, message: 'User not found' });
+    }
+
+    const newToken = generateToken(user._id);
+    setTokenCookie(res, newToken);
+    return res.json({ success: true, token: newToken });
   } catch (error) {
     console.error('Refresh token error:', error);
-    res.status(500).json({
-      success: false,
-      message: 'Failed to refresh token'
-    });
+    res.status(500).json({ success: false, message: 'Failed to refresh token' });
   }
 };
 

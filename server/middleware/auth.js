@@ -20,8 +20,9 @@ const authenticateToken = async (req, res, next) => {
       });
     }
 
-    // Verify token
-    const decoded = jwt.verify(token, process.env.JWT_SECRET);
+  // Verify token
+  const JWT_SECRET = process.env.JWT_SECRET || 'dev-secret-key';
+  const decoded = jwt.verify(token, JWT_SECRET);
     
     // Get user from token
     const user = await User.findById(decoded.userId);
@@ -163,7 +164,8 @@ const optionalAuth = async (req, res, next) => {
 
     if (token) {
       try {
-        const decoded = jwt.verify(token, process.env.JWT_SECRET);
+        const JWT_SECRET = process.env.JWT_SECRET || 'dev-secret-key';
+        const decoded = jwt.verify(token, JWT_SECRET);
         const user = await User.findById(decoded.userId);
         
         if (user && !user.isLocked) {

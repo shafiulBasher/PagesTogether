@@ -23,3 +23,6 @@ Description of the features:
                       user have. Each book will contain the necessary information. And can be able to add the book cover 
                       from the internet through the copy-pasted link. Second there will be a Cureently reading section at the top of the 
                       My BookShelf which books user id currently reading. These book can be added from the My BookShelf.
+3. Home Feed & Activity Stream: 
+4. Book Reading Community
+5. Social Features (Friends & Following)

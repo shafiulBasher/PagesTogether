@@ -510,8 +510,16 @@
   justify-content: center;
 }
 
+.add-book-options {
+  display: flex;
+  gap: 20px;
+  align-items: center;
+  justify-content: center;
+  flex-wrap: wrap;
+}
+
 .add-book-card {
-  width: 100%;
+  width: 160px;
   height: 240px;
   border: 2px dashed #d1d5db;
   border-radius: 12px;
@@ -524,10 +532,19 @@
   background: #f9fafb;
 }
 
+.add-book-card.manual {
+  border-color: #fbbf24;
+}
+
 .add-book-card:hover {
   border-color: #667eea;
   background: #f0f4ff;
   transform: translateY(-2px);
+}
+
+.add-book-card.manual:hover {
+  border-color: #f59e0b;
+  background: #fffbeb;
 }
 
 .add-icon {
@@ -561,7 +578,11 @@
 .empty-state p {
   font-size: 16px;
   color: #6b7280;
-  margin-bottom: 20px;
+  margin-bottom: 30px;
+}
+
+.empty-state .add-book-options {
+  justify-content: center;
 }
 
 /* Loading and Error States */

@@ -2,6 +2,17 @@ const User = require('../models/User');
 const Book = require('../models/Book');
 const { validationResult } = require('express-validator');
 
+// Helper to ensure absolute URL for images
+const makeAbsoluteUrl = (value, req) => {
+  if (!value) return value;
+  // If already absolute, return as-is
+  if (/^https?:\/\//i.test(value)) return value;
+  // Normalize leading slash
+  const path = value.startsWith('/') ? value : `/${value}`;
+  const baseUrl = `${req.protocol}://${req.get('host')}`;
+  return `${baseUrl}${path}`;
+};
+
 exports.getProfile = async (req, res) => {
   try {
     const user = await User.findById(req.user.id);
@@ -13,13 +24,13 @@ exports.getProfile = async (req, res) => {
       });
     }
 
-    res.json({
+  res.json({
       success: true,
       user: {
         id: user._id,
         username: user.username,
         email: user.email,
-        profilePicture: user.profilePicture,
+    profilePicture: makeAbsoluteUrl(user.profilePicture, req),
         bio: user.bio,
         favoriteQuote: user.favoriteQuote,
         authProvider: user.authProvider,
@@ -57,7 +68,7 @@ exports.updateProfile = async (req, res) => {
       });
     }
 
-    const { username, profilePicture, bio, favoriteQuote } = req.body;
+  const { username, profilePicture, bio, favoriteQuote } = req.body;
     
     // Check if username is already taken (if being changed)
     if (username && username !== user.username) {
@@ -75,16 +86,16 @@ exports.updateProfile = async (req, res) => {
     if (bio !== undefined) user.bio = bio;
     if (favoriteQuote !== undefined) user.favoriteQuote = favoriteQuote;
     
-    await user.save();
+  await user.save();
     
-    res.json({
+  res.json({
       success: true,
       message: 'Profile updated successfully',
       user: {
         id: user._id,
         username: user.username,
         email: user.email,
-        profilePicture: user.profilePicture,
+    profilePicture: makeAbsoluteUrl(user.profilePicture, req),
         bio: user.bio,
         favoriteQuote: user.favoriteQuote
       }
@@ -226,16 +237,14 @@ exports.uploadProfilePicture = async (req, res) => {
       });
     }
 
-    // Create the full URL for the profile picture
-    const baseUrl = process.env.NODE_ENV === 'production' 
-      ? 'your-production-domain.com' 
-      : 'http://localhost:5000';
-    const profilePictureUrl = `${baseUrl}/uploads/profiles/${req.file.filename}`;
+  // Create the full URL for the profile picture
+  const baseUrl = `${req.protocol}://${req.get('host')}`;
+  const profilePictureUrl = `${baseUrl}/uploads/profiles/${req.file.filename}`;
     
     user.profilePicture = profilePictureUrl;
     await user.save();
 
-    res.json({
+  res.json({
       success: true,
       message: 'Profile picture updated successfully',
       profilePicture: profilePictureUrl

@@ -87,9 +87,24 @@ jspm_packages/
 # Uploaded files
 /server/uploads/
 
+# Root-level uploads (server already handles its own uploads dir)
+/uploads/
+
 # Database
 *.db
 *.sqlite
+
+# MongoDB local database artifacts (do not commit)
+/*.wt
+/WiredTiger*
+/journal/
+/mongod.lock
+/storage.bson
+/_mdb_catalog.wt
+/*sizeStorer.wt
+
+# Local diagnostic/telemetry data
+/diagnostic.data/
 
 # MacOS
 .DS_Store

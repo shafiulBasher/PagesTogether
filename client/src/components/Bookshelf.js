@@ -1,14 +1,22 @@
 import React, { useState, useEffect } from 'react';
-import { bookAPI, userAPI } from '../services/api';
+import { useParams } from 'react-router-dom';
+import { bookAPI, userAPI, socialAPI } from '../services/api';
+import { googleBooksAPI } from '../services/bookSearch';
 import { useAuth } from '../contexts/AuthContext';
 import './Bookshelf.css';
 
 const Bookshelf = () => {
+  const { id: viewedUserId } = useParams();
   const { user } = useAuth();
+  const currentUserId = user?.id || user?._id;
+  const isOwnProfile = !viewedUserId || String(viewedUserId) === String(currentUserId);
+  const [viewedUsername, setViewedUsername] = useState('');
   const [books, setBooks] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const [showAddModal, setShowAddModal] = useState(false);
+  const [showSearchModal, setShowSearchModal] = useState(false);
+  const [addTab, setAddTab] = useState('manual'); // 'manual' | 'search'
   const [newBook, setNewBook] = useState({
     title: '',
     author: '',
@@ -25,31 +33,111 @@ const Bookshelf = () => {
   const [showProgressModal, setShowProgressModal] = useState(false);
   const [selectedReadingBook, setSelectedReadingBook] = useState(null);
   const [readingProgress, setReadingProgress] = useState(0);
+  // Inline search state (for unified Add Book modal)
+  const [query, setQuery] = useState('');
+  const [searchResults, setSearchResults] = useState([]);
+  const [searchLoading, setSearchLoading] = useState(false);
+  const [searchError, setSearchError] = useState('');
+  const [selectedSearchBook, setSelectedSearchBook] = useState(null);
 
   useEffect(() => {
+    // If viewing someone else's profile, load their public bookshelf/currently reading
+    if (!isOwnProfile && viewedUserId) {
+      (async () => {
+        try {
+          setLoading(true);
+          setError('');
+          const res = await socialAPI.getUserProfile(viewedUserId);
+          const profile = res?.data?.data?.user;
+          const publicBooks = Array.isArray(profile?.bookshelf) ? profile.bookshelf : [];
+          const publicCR = Array.isArray(profile?.currentlyReading) ? profile.currentlyReading : [];
+          setBooks(publicBooks);
+          // Public currently reading comes from server; no progress info available
+          setCurrentlyReading(publicCR);
+          setViewedUsername(profile?.username || 'User');
+        } catch (e) {
+          console.error('Load public bookshelf failed:', e);
+          setError('Failed to load user bookshelf.');
+          setBooks([]);
+          setCurrentlyReading([]);
+        } finally {
+          setLoading(false);
+        }
+      })();
+      return;
+    }
+
+    // Otherwise, load current user's bookshelf/currently reading
     if (user) {
       loadBooks();
-      loadCurrentlyReading();
+      loadCurrentlyReadingFromServer();
     }
-  }, [user]);
+  }, [user, viewedUserId, isOwnProfile]);
 
-  // Load currently reading books from localStorage
-  const loadCurrentlyReading = () => {
-    if (user) {
-      const stored = localStorage.getItem(`currentlyReading_${user.id || user._id}`);
+  // Merge reading progress from localStorage into server-provided list
+  const mergeProgress = (serverList) => {
+    try {
+      const uid = user?.id || user?._id;
+      const stored = localStorage.getItem(`currentlyReading_${uid}`);
+      if (!stored) return serverList;
+      const parsed = JSON.parse(stored);
+      const progressMap = {};
+      parsed.forEach((b) => {
+        if (b && b._id) progressMap[b._id] = { readingProgress: b.readingProgress || 0, isRead: !!b.isRead };
+      });
+      return serverList.map((b) => ({ ...b, ...(progressMap[b._id] || {}) }));
+    } catch (e) {
+      return serverList;
+    }
+  };
+
+  // Load currently reading from server for own profile and merge local progress
+  const loadCurrentlyReadingFromServer = async () => {
+    if (!isOwnProfile) return;
+    try {
+      const resp = await userAPI.getCurrentlyReading();
+      const list = Array.isArray(resp?.data?.currentlyReading) ? resp.data.currentlyReading : [];
+      setCurrentlyReading(mergeProgress(list));
+
+      // If server has no items but local storage has some, migrate them by adding to server
+      if (list.length === 0) {
+        try {
+          const uid = user?.id || user?._id;
+          const stored = localStorage.getItem(`currentlyReading_${uid}`);
+          const localItems = stored ? JSON.parse(stored) : [];
+          if (Array.isArray(localItems) && localItems.length) {
+            await Promise.allSettled(
+              localItems.map((b) => (b && b._id ? userAPI.addToCurrentlyReading(b._id) : Promise.resolve()))
+            );
+            // Refresh after migration
+            const resp2 = await userAPI.getCurrentlyReading();
+            const list2 = Array.isArray(resp2?.data?.currentlyReading) ? resp2.data.currentlyReading : [];
+            setCurrentlyReading(mergeProgress(list2));
+          }
+        } catch (_) {
+          // ignore migration errors
+        }
+      }
+    } catch (err) {
+      console.error('Failed to load currently reading from server:', err);
+      // Fallback to local stored progress if server fails
+      const uid = user?.id || user?._id;
+      const stored = localStorage.getItem(`currentlyReading_${uid}`);
       if (stored) {
         try {
-          const parsedBooks = JSON.parse(stored);
-          setCurrentlyReading(parsedBooks);
-        } catch (err) {
-          console.error('Error loading currently reading books:', err);
+          setCurrentlyReading(JSON.parse(stored));
+        } catch (_) {
+          setCurrentlyReading([]);
         }
+      } else {
+        setCurrentlyReading([]);
       }
     }
   };
 
-  // Save currently reading books to localStorage
+  // Save currently reading progress to localStorage (progress/isRead flags)
   const saveCurrentlyReading = (books) => {
+    if (!isOwnProfile) return; // Read-only on public profile
     if (user) {
       localStorage.setItem(`currentlyReading_${user.id || user._id}`, JSON.stringify(books));
     }
@@ -75,7 +163,7 @@ const Bookshelf = () => {
     try {
       setLoading(true);
       setError('');
-      
+      if (!isOwnProfile) return; // public load handled in effect
       const bookshelfRes = await bookAPI.getBookshelf().catch(() => ({ data: [] }));
       const allBooks = Array.isArray(bookshelfRes.data) ? bookshelfRes.data : [];
       setBooks(allBooks);
@@ -88,15 +176,48 @@ const Bookshelf = () => {
   };
 
   const handleOpenModal = () => {
+    if (!isOwnProfile) return;
     setShowAddModal(true);
+    setAddTab('manual');
     setNewBook({ title: '', author: '', coverImage: '' });
     setError('');
+    // reset search side
+    setQuery('');
+    setSearchResults([]);
+    setSelectedSearchBook(null);
+    setSearchError('');
+  };
+
+  const handleOpenSearchModal = () => {
+    if (!isOwnProfile) return;
+    // Open unified modal in search tab
+    setShowAddModal(true);
+    setAddTab('search');
+    setQuery('');
+    setSearchResults([]);
+    setSelectedSearchBook(null);
+    setSearchError('');
   };
 
   const handleCloseModal = () => {
     setShowAddModal(false);
     setNewBook({ title: '', author: '', coverImage: '' });
     setError('');
+  // reset search fields
+  setQuery('');
+  setSearchResults([]);
+  setSelectedSearchBook(null);
+  setSearchError('');
+  };
+
+  const handleCloseSearchModal = () => {
+    setShowSearchModal(false);
+  };
+
+  const handleBookAddFromSearch = (book) => {
+    if (!isOwnProfile) return;
+    setBooks(prevBooks => [...prevBooks, book]);
+    setShowSearchModal(false);
   };
 
   const handleInputChange = (e) => {
@@ -108,6 +229,7 @@ const Bookshelf = () => {
   };
 
   const handleAddBook = async () => {
+    if (!isOwnProfile) return;
     // Validation
     if (!newBook.title.trim() || !newBook.author.trim()) {
       setError('Book title and author are required');
@@ -138,8 +260,84 @@ const Bookshelf = () => {
     }
   };
 
+  // Inline search handlers (for unified modal)
+  const runSearch = async (value) => {
+    if (!value || value.trim().length < 2) {
+      setSearchResults([]);
+      setSearchError('');
+      return;
+    }
+    try {
+      setSearchLoading(true);
+      setSearchError('');
+      const books = await googleBooksAPI.searchBooks(value);
+      setSearchResults(books);
+    } catch (e) {
+      setSearchError('Failed to search books. Please try again.');
+    } finally {
+      setSearchLoading(false);
+    }
+  };
+
+  const handleSearchInput = (e) => {
+    const v = e.target.value;
+    setQuery(v);
+    clearTimeout(window.__bs_debounce);
+    window.__bs_debounce = setTimeout(() => runSearch(v), 400);
+  };
+
+  const handleSelectSearchBook = (b) => {
+    setSelectedSearchBook(b);
+  };
+
+  const handleAddSelectedSearchBook = async () => {
+    if (!selectedSearchBook) return;
+    try {
+      setSearchLoading(true);
+      // Sanitize to satisfy server-side validation limits
+      const clean = (s = '', limit = Infinity) =>
+        String(s || '')
+          .replace(/<[^>]+>/g, '') // strip HTML tags from descriptions
+          .replace(/[\s\n\r\t]+/g, ' ')
+          .trim()
+          .slice(0, limit);
+
+      const isHttpUrl = (u) => /^https?:\/\//i.test(u || '');
+      const safeTitle = clean(selectedSearchBook.title, 200) || 'Untitled';
+      // Use first author if the joined string is lengthy
+      const rawAuthor = selectedSearchBook.author || '';
+      const firstAuthor = rawAuthor.split(',')[0] || rawAuthor;
+      const safeAuthor = clean(firstAuthor, 100);
+      const safeDescription = clean(selectedSearchBook.description, 1000);
+      const safeCover = isHttpUrl(selectedSearchBook.coverImage)
+        ? clean(selectedSearchBook.coverImage)
+        : '';
+
+      const bookData = {
+        title: safeTitle,
+        author: safeAuthor,
+        description: safeDescription,
+        coverImage: safeCover, // optional; empty string will be ignored by validator
+        googleBookId: selectedSearchBook.googleBookId,
+        source: 'google'
+      };
+      await bookAPI.addBook(bookData);
+      await loadBooks();
+      handleCloseModal();
+      alert('Book added to your bookshelf!');
+    } catch (e) {
+      const apiMsg = e?.response?.data?.message;
+      const apiErrors = e?.response?.data?.errors;
+      const detail = Array.isArray(apiErrors) && apiErrors.length ? `: ${apiErrors[0]?.msg || apiErrors[0]}` : '';
+      setSearchError(apiMsg ? `${apiMsg}${detail}` : 'Failed to add book');
+    } finally {
+      setSearchLoading(false);
+    }
+  };
+
   const handleBookMenuClick = (e, bookId) => {
     e.stopPropagation();
+    if (!isOwnProfile) return; // disable menu on public view
     setShowBookMenu(showBookMenu === bookId ? null : bookId);
   };
 
@@ -149,6 +347,7 @@ const Bookshelf = () => {
   };
 
   const handleDownloadCover = (book) => {
+    if (!isOwnProfile) return;
     setSelectedBook(book);
     setNewCoverUrl(book.coverImage || '');
     setShowUpdateCoverModal(true);
@@ -156,6 +355,7 @@ const Bookshelf = () => {
   };
 
   const handleUpdateCover = async () => {
+    if (!isOwnProfile) return;
     if (!newCoverUrl.trim()) {
       alert('Please enter a valid image URL');
       return;
@@ -193,16 +393,14 @@ const Bookshelf = () => {
   };
 
   const handleRemoveBook = async (book) => {
+    if (!isOwnProfile) return;
     if (window.confirm(`Are you sure you want to remove "${book.title}" from your bookshelf?`)) {
       try {
         await bookAPI.deleteBook(book._id);
-        
-        // Also remove from currently reading if it exists there
-        const updatedCurrentlyReading = currentlyReading.filter(cb => cb._id !== book._id);
-        if (updatedCurrentlyReading.length !== currentlyReading.length) {
-          setCurrentlyReading(updatedCurrentlyReading);
-          saveCurrentlyReading(updatedCurrentlyReading);
-        }
+        // Also remove from currently reading on server if it exists there
+        try { await userAPI.removeFromCurrentlyReading(book._id); } catch (_) {}
+        // Refresh currently reading from server
+        await loadCurrentlyReadingFromServer();
         
         await loadBooks();
         setShowBookMenu(null);
@@ -214,22 +412,37 @@ const Bookshelf = () => {
   };
 
   const handleAddToCurrentlyReading = (book) => {
-    if (!currentlyReading.find(cb => cb._id === book._id)) {
-      const bookWithProgress = { ...book, readingProgress: 0, isRead: false };
-      const updatedBooks = [...currentlyReading, bookWithProgress];
-      setCurrentlyReading(updatedBooks);
-      saveCurrentlyReading(updatedBooks);
-    }
+    if (!isOwnProfile) return;
+    // Add on server, then refresh list and merge local progress
+    const add = async () => {
+      try {
+        await userAPI.addToCurrentlyReading(book._id);
+        await loadCurrentlyReadingFromServer();
+      } catch (e) {
+        console.error('Add to currently reading failed:', e);
+        alert(e?.response?.data?.message || 'Failed to add to currently reading');
+      }
+    };
+    add();
     setShowBookMenu(null);
   };
 
   const handleRemoveFromCurrentlyReading = (bookId) => {
-    const updatedBooks = currentlyReading.filter(book => book._id !== bookId);
-    setCurrentlyReading(updatedBooks);
-    saveCurrentlyReading(updatedBooks);
+    if (!isOwnProfile) return;
+    const remove = async () => {
+      try {
+        await userAPI.removeFromCurrentlyReading(bookId);
+        await loadCurrentlyReadingFromServer();
+      } catch (e) {
+        console.error('Remove from currently reading failed:', e);
+        alert(e?.response?.data?.message || 'Failed to remove from currently reading');
+      }
+    };
+    remove();
   };
 
   const handleOpenCurrentlyReadingModal = () => {
+    if (!isOwnProfile) return;
     setShowAddToCurrentlyReading(true);
     setShowBookMenu(null);
   };
@@ -240,10 +453,12 @@ const Bookshelf = () => {
 
   const handleCurrentlyReadingMenuClick = (e, bookId) => {
     e.stopPropagation();
+    if (!isOwnProfile) return; // disable menu on public view
     setShowCurrentlyReadingMenu(showCurrentlyReadingMenu === bookId ? null : bookId);
   };
 
   const handleMarkAsRead = (book) => {
+    if (!isOwnProfile) return;
     const updatedBooks = currentlyReading.map(b => 
       b._id === book._id ? { ...b, isRead: true, readingProgress: 100 } : b
     );
@@ -253,6 +468,7 @@ const Bookshelf = () => {
   };
 
   const handleUpdateProgress = (book) => {
+    if (!isOwnProfile) return;
     setSelectedReadingBook(book);
     setReadingProgress(book.readingProgress || 0);
     setShowProgressModal(true);
@@ -260,6 +476,7 @@ const Bookshelf = () => {
   };
 
   const handleSaveProgress = () => {
+    if (!isOwnProfile) return;
     if (selectedReadingBook) {
       const updatedBooks = currentlyReading.map(b => 
         b._id === selectedReadingBook._id 
@@ -280,8 +497,8 @@ const Bookshelf = () => {
 
   if (loading) {
     return (
-      <div className="bookshelf-container">
-        <div className="loading">Loading your books...</div>
+      <div className="currently-reading-section">
+        <h3>Currently Reading:</h3>
       </div>
     );
   }
@@ -304,61 +521,65 @@ const Bookshelf = () => {
                     </div>
                   </div>
                 )}
-                
-                {/* Progress indicator */}
-                {book.readingProgress > 0 && (
+
+                {/* Progress indicator (own profile only) */}
+                {isOwnProfile && book.readingProgress > 0 && (
                   <div className="progress-indicator">{book.readingProgress}%</div>
                 )}
-                
-                {/* Read badge */}
-                {book.isRead && (
+
+                {/* Read badge (own profile only) */}
+                {isOwnProfile && book.isRead && (
                   <div className="read-badge">Read</div>
                 )}
-                
-                {/* Three dots menu button */}
-                <button 
-                  className="currently-reading-menu-button"
-                  onClick={(e) => handleCurrentlyReadingMenuClick(e, book._id)}
-                />
-                
-                {/* Currently Reading Menu popup */}
-                {showCurrentlyReadingMenu === book._id && (
-                  <div className="currently-reading-menu-popup" onClick={(e) => e.stopPropagation()}>
-                    <div className="book-menu-item" onClick={() => handleMarkAsRead(book)}>
-                      <span className="book-menu-icon">📖</span>
-                      Mark as Read
-                    </div>
-                    <div className="book-menu-item" onClick={() => handleUpdateProgress(book)}>
-                      <span className="book-menu-icon">📊</span>
-                      Progress reading
-                    </div>
-                    <div className="book-menu-item remove" onClick={() => handleRemoveFromCurrentlyReading(book._id)}>
-                      <span className="book-menu-icon">❌</span>
-                      Remove
-                    </div>
-                  </div>
+
+                {/* Actions menu (own profile only) */}
+                {isOwnProfile && (
+                  <>
+                    <button
+                      className="currently-reading-menu-button"
+                      onClick={(e) => handleCurrentlyReadingMenuClick(e, book._id)}
+                    />
+                    {showCurrentlyReadingMenu === book._id && (
+                      <div className="currently-reading-menu-popup" onClick={(e) => e.stopPropagation()}>
+                        <div className="book-menu-item" onClick={() => handleMarkAsRead(book)}>
+                          <span className="book-menu-icon">📖</span>
+                          Mark as Read
+                        </div>
+                        <div className="book-menu-item" onClick={() => handleUpdateProgress(book)}>
+                          <span className="book-menu-icon">📊</span>
+                          Progress reading
+                        </div>
+                        <div className="book-menu-item remove" onClick={() => handleRemoveFromCurrentlyReading(book._id)}>
+                          <span className="book-menu-icon">❌</span>
+                          Remove
+                        </div>
+                      </div>
+                    )}
+                  </>
                 )}
               </div>
             </div>
           ))}
-          
-          {/* Add Book to Currently Reading */}
-          <div className="add-to-currently-reading">
-            <div className="add-reading-card" onClick={handleOpenCurrentlyReadingModal}>
-              <div className="add-icon">+</div>
-              <div className="add-text">Add Book</div>
+
+          {/* Add Book to Currently Reading (own profile only) */}
+          {isOwnProfile && (
+            <div className="add-to-currently-reading">
+              <div className="add-reading-card" onClick={handleOpenCurrentlyReadingModal}>
+                <div className="add-icon">+</div>
+                <div className="add-text">Add Book</div>
+              </div>
             </div>
-          </div>
+          )}
         </div>
       </div>
 
       <div className="bookshelf-header">
-        <h2>My BookShelf</h2>
+        <h2>{isOwnProfile ? 'My BookShelf' : `${viewedUsername ? viewedUsername + "'s" : 'User'} BookShelf`}</h2>
       </div>
 
       {error && <div className="error-message">{error}</div>}
 
-      {/* Books Grid with Add Button */}
+  {/* Books Grid; Add Book tile appears after books */}
       <div className="books-grid-container">
         {books.map((book, index) => (
           <div key={book._id} className="book-item">
@@ -374,21 +595,23 @@ const Bookshelf = () => {
                 </div>
               )}
               {/* Progress indicator for some books */}
-              {index === 1 && <div className="progress-indicator">20%</div>}
-              {index === 8 && <div className="progress-indicator">92%</div>}
+              {isOwnProfile && index === 1 && <div className="progress-indicator">20%</div>}
+              {isOwnProfile && index === 8 && <div className="progress-indicator">92%</div>}
               {/* Book title overlay for hover effect */}
               <div className="author-overlay">
                 <p className="author-name">{book.title}</p>
               </div>
               
               {/* Three dots menu button */}
-              <button 
-                className="book-menu-button"
-                onClick={(e) => handleBookMenuClick(e, book._id)}
-              />
+              {isOwnProfile && (
+                <button 
+                  className="book-menu-button"
+                  onClick={(e) => handleBookMenuClick(e, book._id)}
+                />
+              )}
               
               {/* Book menu popup */}
-              {showBookMenu === book._id && (
+              {isOwnProfile && showBookMenu === book._id && (
                 <div className="book-menu-popup" onClick={(e) => e.stopPropagation()}>
                   <div className="book-menu-item" onClick={() => handleBookInfo(book)}>
                     <span className="book-menu-icon">ℹ️</span>
@@ -411,107 +634,194 @@ const Bookshelf = () => {
             </div>
           </div>
         ))}
-        
-        {/* Add Book Button */}
-        <div className="add-book-item">
-          <div className="add-book-card" onClick={handleOpenModal}>
-            <div className="add-icon">+</div>
-            <div className="add-text">Add Book</div>
+
+        {isOwnProfile && (
+          <div className="book-item">
+            <div className="add-reading-card" onClick={handleOpenModal}>
+              <div className="add-icon">+</div>
+              <div className="add-text">Add Book</div>
+            </div>
           </div>
-        </div>
+        )}
       </div>
 
       {books.length === 0 && (
         <div className="empty-state">
           <p>No books in your collection yet.</p>
-          <div className="add-book-item">
-            <div className="add-book-card" onClick={handleOpenModal}>
-              <div className="add-icon">+</div>
-              <div className="add-text">Add Book</div>
-            </div>
-          </div>
         </div>
       )}
 
-      {/* Add Book Modal */}
-      {showAddModal && (
+      {/* Unified Add Book Modal (Manual + Search) */}
+  {isOwnProfile && showAddModal && (
         <div className="modal-overlay" onClick={handleCloseModal}>
           <div className="modal-content" onClick={(e) => e.stopPropagation()}>
             <div className="modal-header">
-              <h3>Add New Book</h3>
+              <h3>Add Book</h3>
               <button className="close-button" onClick={handleCloseModal}>
                 ×
               </button>
             </div>
             
             <div className="modal-body">
-              {error && <div className="error-message">{error}</div>}
-              
-              <div className="form-group">
-                <label htmlFor="title">Book Title *</label>
-                <input
-                  id="title"
-                  name="title"
-                  type="text"
-                  value={newBook.title}
-                  onChange={handleInputChange}
-                  placeholder="Enter book title"
-                  disabled={isSubmitting}
-                />
+              {/* Tab toggle */}
+              <div style={{ display: 'flex', gap: 8, marginBottom: 12 }}>
+                <button
+                  className={`save-button ${addTab === 'manual' ? '' : 'secondary'}`}
+                  onClick={() => setAddTab('manual')}
+                  type="button"
+                >
+                  Add Manually
+                </button>
+                <button
+                  className={`save-button ${addTab === 'search' ? '' : 'secondary'}`}
+                  onClick={() => setAddTab('search')}
+                  type="button"
+                >
+                  Search Online
+                </button>
               </div>
 
-              <div className="form-group">
-                <label htmlFor="author">Author Name *</label>
-                <input
-                  id="author"
-                  name="author"
-                  type="text"
-                  value={newBook.author}
-                  onChange={handleInputChange}
-                  placeholder="Enter author name"
-                  disabled={isSubmitting}
-                />
-              </div>
+              {addTab === 'manual' ? (
+                <>
+                  {error && <div className="error-message">{error}</div>}
+                  <div className="form-group">
+                    <label htmlFor="title">Book Title *</label>
+                    <input
+                      id="title"
+                      name="title"
+                      type="text"
+                      value={newBook.title}
+                      onChange={handleInputChange}
+                      placeholder="Enter book title"
+                      disabled={isSubmitting}
+                    />
+                  </div>
 
-              <div className="form-group">
-                <label htmlFor="coverImage">Cover Image URL (optional)</label>
-                <input
-                  id="coverImage"
-                  name="coverImage"
-                  type="url"
-                  value={newBook.coverImage}
-                  onChange={handleInputChange}
-                  placeholder="Paste image URL here"
-                  disabled={isSubmitting}
-                />
-                <small className="form-help">
-                  You can copy and paste an image URL from the web
-                </small>
-              </div>
+                  <div className="form-group">
+                    <label htmlFor="author">Author Name *</label>
+                    <input
+                      id="author"
+                      name="author"
+                      type="text"
+                      value={newBook.author}
+                      onChange={handleInputChange}
+                      placeholder="Enter author name"
+                      disabled={isSubmitting}
+                    />
+                  </div>
+
+                  <div className="form-group">
+                    <label htmlFor="coverImage">Cover Image URL (optional)</label>
+                    <input
+                      id="coverImage"
+                      name="coverImage"
+                      type="url"
+                      value={newBook.coverImage}
+                      onChange={handleInputChange}
+                      placeholder="Paste image URL here"
+                      disabled={isSubmitting}
+                    />
+                    <small className="form-help">You can paste an image URL from the web</small>
+                  </div>
+                </>
+              ) : (
+                <>
+                  {searchError && <div className="error-message">{searchError}</div>}
+                  <div className="search-section">
+                    <input
+                      type="text"
+                      placeholder="Search by title, author, or ISBN..."
+                      value={query}
+                      onChange={handleSearchInput}
+                      className="search-input"
+                      autoFocus
+                    />
+                    {searchLoading && <div className="search-loading">Searching...</div>}
+                  </div>
+
+                  {!selectedSearchBook ? (
+                    <div className="search-results">
+                      {searchResults.length > 0 ? (
+                        <div className="books-grid">
+                          {searchResults.map((b, idx) => (
+                            <div key={b.googleBookId || idx} className="book-result-card" onClick={() => handleSelectSearchBook(b)}>
+                              <div className="book-cover">
+                                {b.coverImage ? <img src={b.coverImage} alt={b.title} /> : (
+                                  <div className="cover-placeholder"><span>📚</span></div>
+                                )}
+                              </div>
+                              <div className="book-info">
+                                <h4>{b.title}</h4>
+                                <p className="book-author">by {b.author}</p>
+                              </div>
+                            </div>
+                          ))}
+                        </div>
+                      ) : (
+                        query.trim().length >= 2 && !searchLoading ? (
+                          <div className="no-results">No results for "{query}"</div>
+                        ) : (
+                          <div className="search-help">
+                            <h3>📚 Search for Books</h3>
+                            <p>Start typing to search for books by title, author, or ISBN.</p>
+                          </div>
+                        )
+                      )}
+                    </div>
+                  ) : (
+                    <div className="book-details">
+                      <button className="back-button" onClick={() => setSelectedSearchBook(null)}>← Back to results</button>
+                      <div className="book-details-content">
+                        <div className="book-cover-large">
+                          {selectedSearchBook.coverImage ? (
+                            <img src={selectedSearchBook.coverImage} alt={selectedSearchBook.title} />
+                          ) : (
+                            <div className="cover-placeholder-large"><span>📚</span></div>
+                          )}
+                        </div>
+                        <div className="book-info-detailed">
+                          <h3>{selectedSearchBook.title}</h3>
+                          <p className="author">by {selectedSearchBook.author}</p>
+                        </div>
+                      </div>
+                    </div>
+                  )}
+                </>
+              )}
             </div>
 
             <div className="modal-footer">
               <button 
                 className="cancel-button" 
                 onClick={handleCloseModal}
-                disabled={isSubmitting}
+                disabled={isSubmitting || searchLoading}
               >
                 Cancel
               </button>
-              <button 
-                className="save-button" 
-                onClick={handleAddBook}
-                disabled={isSubmitting}
-              >
-                {isSubmitting ? 'Adding...' : 'Save'}
-              </button>
+              {addTab === 'manual' ? (
+                <button 
+                  className="save-button" 
+                  onClick={handleAddBook}
+                  disabled={isSubmitting}
+                >
+                  {isSubmitting ? 'Adding...' : 'Save'}
+                </button>
+              ) : (
+                <button 
+                  className="save-button" 
+                  onClick={handleAddSelectedSearchBook}
+                  disabled={searchLoading || !selectedSearchBook}
+                >
+                  {searchLoading ? 'Adding...' : 'Add to My Bookshelf'}
+                </button>
+              )}
             </div>
           </div>
         </div>
       )}
 
       {/* Update Book Cover Modal */}
-      {showUpdateCoverModal && (
+  {isOwnProfile && showUpdateCoverModal && (
         <div className="modal-overlay" onClick={handleCloseUpdateCoverModal}>
           <div className="modal-content" onClick={(e) => e.stopPropagation()}>
             <div className="modal-header">
@@ -587,7 +897,7 @@ const Bookshelf = () => {
       )}
 
       {/* Add to Currently Reading Modal */}
-      {showAddToCurrentlyReading && (
+  {isOwnProfile && showAddToCurrentlyReading && (
         <div className="modal-overlay" onClick={handleCloseCurrentlyReadingModal}>
           <div className="modal-content" onClick={(e) => e.stopPropagation()}>
             <div className="modal-header">
@@ -646,7 +956,7 @@ const Bookshelf = () => {
       )}
 
       {/* Reading Progress Modal */}
-      {showProgressModal && (
+  {isOwnProfile && showProgressModal && (
         <div className="modal-overlay" onClick={handleCloseProgressModal}>
           <div className="modal-content" onClick={(e) => e.stopPropagation()}>
             <div className="modal-header">
@@ -708,6 +1018,8 @@ const Bookshelf = () => {
           </div>
         </div>
       )}
+
+  {/* Book Search Modal removed; search is integrated above */}
     </div>
   );
 };

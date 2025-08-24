@@ -11,6 +11,16 @@ const UserSchema = new mongoose.Schema({
   bookshelf: [{ type: mongoose.Schema.Types.ObjectId, ref: 'Book' }],
   currentlyReading: [{ type: mongoose.Schema.Types.ObjectId, ref: 'Book' }],
   
+  // Social features
+  friends: [{ type: mongoose.Schema.Types.ObjectId, ref: 'User' }],
+  following: [{ type: mongoose.Schema.Types.ObjectId, ref: 'User' }],
+  followers: [{ type: mongoose.Schema.Types.ObjectId, ref: 'User' }],
+  
+  // Social counts for quick access
+  friendsCount: { type: Number, default: 0 },
+  followingCount: { type: Number, default: 0 },
+  followersCount: { type: Number, default: 0 },
+  
   // Authentication fields
   isEmailVerified: { type: Boolean, default: false },
   emailVerificationToken: { type: String },

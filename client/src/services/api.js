@@ -1,8 +1,8 @@
 import axios from 'axios';
 
-// Base API configuration
-const API_BASE_URL = process.env.NODE_ENV === 'production' 
-  ? 'your-production-api-url' 
+// Simple localhost dev base and production fallback
+const API_BASE_URL = process.env.NODE_ENV === 'production'
+  ? (process.env.REACT_APP_API_URL || (typeof window !== 'undefined' ? window.location.origin : ''))
   : 'http://localhost:5000';
 
 const api = axios.create({
@@ -101,10 +101,16 @@ api.interceptors.response.use(
       isRefreshing = true;
 
       try {
-        // Use full URL for refresh to avoid interceptor confusion
-        const refreshResponse = await axios.post(`${API_BASE_URL}/api/auth/refresh-token`, {}, {
-          withCredentials: true
-        });
+        // Use explicit base URL (localhost in dev) for refresh
+        const currentToken = getAuthToken();
+        const refreshResponse = await axios.post(
+          `${API_BASE_URL}/api/auth/refresh-token`,
+          {},
+          {
+            withCredentials: true,
+            headers: currentToken ? { Authorization: `Bearer ${currentToken}` } : {}
+          }
+        );
         
         if (refreshResponse.data?.token) {
           const newToken = refreshResponse.data.token;
@@ -176,7 +182,73 @@ export const bookAPI = {
   deleteBook: (bookId) => api.delete(`/api/books/${bookId}`),
 };
 
+// Group API services
+export const groupAPI = {
+  getAllGroups: () => api.get('/api/groups'),
+  getGroup: (groupId) => api.get(`/api/groups/${groupId}`),
+  createGroup: (groupData) => api.post('/api/groups', groupData),
+  updateGroup: (groupId, groupData) => api.put(`/api/groups/${groupId}`, groupData),
+  deleteGroup: (groupId) => api.delete(`/api/groups/${groupId}`),
+  joinGroup: (groupId) => api.post(`/api/groups/${groupId}/join`),
+  leaveGroup: (groupId) => api.post(`/api/groups/${groupId}/leave`),
+  getGroupPosts: (groupId) => api.get(`/api/groups/${groupId}/posts`),
+  createGroupPost: (groupId, postData) => api.post(`/api/groups/${groupId}/posts`, postData),
+  updateGroupPost: (groupId, postId, postData) => api.put(`/api/groups/${groupId}/posts/${postId}`, postData),
+  deleteGroupPost: (groupId, postId) => api.delete(`/api/groups/${groupId}/posts/${postId}`),
+  uploadGroupImage: (groupId, formData) => api.post(`/api/groups/${groupId}/upload`, formData, {
+    headers: {
+      'Content-Type': 'multipart/form-data',
+    },
+  }),
+  // Invitations
+  inviteMembers: (groupId, recipients) => api.post(`/api/groups/${groupId}/invite`, { recipients }),
+  acceptInvite: (groupId, notificationId) => api.post(`/api/groups/${groupId}/invitations/accept`, { notificationId }),
+  declineInvite: (groupId, notificationId) => api.post(`/api/groups/${groupId}/invitations/decline`, { notificationId }),
+};
+
+// Convenience exports for group functions to match Community.js imports
+export const getGroup = (groupId) => groupAPI.getGroup(groupId);
+export const joinGroup = (groupId) => groupAPI.joinGroup(groupId);
+export const leaveGroup = (groupId) => groupAPI.leaveGroup(groupId);
+export const getGroupPosts = (groupId) => groupAPI.getGroupPosts(groupId);
+export const createGroupPost = (groupId, postData) => groupAPI.createGroupPost(groupId, postData);
+export const deleteGroupPost = (groupId, postId) => groupAPI.deleteGroupPost(groupId, postId);
+export const uploadGroupImage = (groupId, formData) => groupAPI.uploadGroupImage(groupId, formData);
+
 // Health check
 export const healthCheck = () => api.get('/api/health');
+
+// Social API services
+export const socialAPI = {
+  // Friend Requests
+  sendFriendRequest: (userId, message) => api.post('/api/social/friend-request', { userId, message }),
+  getFriendRequests: () => api.get('/api/social/friend-requests'),
+  respondToFriendRequest: (requestId, action) => api.post(`/api/social/friend-request/${requestId}/respond`, { action }),
+  
+  // Friends
+  getFriends: (userId = null) => api.get(userId ? `/api/social/friends/${userId}` : '/api/social/friends'),
+  removeFriend: (friendId) => api.delete(`/api/social/friend/${friendId}`),
+  
+  // Following
+  followUser: (userId) => api.post(`/api/social/follow/${userId}`),
+  unfollowUser: (userId) => api.post(`/api/social/unfollow/${userId}`),
+  getFollowing: (userId = null) => api.get(userId ? `/api/social/following/${userId}` : '/api/social/following'),
+  getFollowers: (userId = null) => api.get(userId ? `/api/social/followers/${userId}` : '/api/social/followers'),
+  
+  // Search & Discovery
+  searchUsers: (query) => api.get(`/api/social/search?q=${encodeURIComponent(query)}`),
+  getUserProfile: (userId) => api.get(`/api/social/profile/${userId}`)
+};
+
+// Notification API
+export const notificationAPI = {
+  // Get notifications
+  getNotifications: () => api.get('/api/notifications'),
+  getUnreadCount: () => api.get('/api/notifications/count'),
+  
+  // Mark as read
+  markAsRead: (notificationId) => api.patch(`/api/notifications/${notificationId}/read`),
+  markAllAsRead: () => api.patch('/api/notifications/read-all')
+};
 
 export default api;

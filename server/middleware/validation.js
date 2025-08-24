@@ -6,8 +6,8 @@ const validateRegister = [
     .trim()
     .isLength({ min: 3, max: 30 })
     .withMessage('Username must be between 3 and 30 characters')
-    .matches(/^[a-zA-Z0-9_-]+$/)
-    .withMessage('Username can only contain letters, numbers, underscores, and hyphens'),
+  .matches(/^[a-zA-Z0-9 _-]+$/)
+  .withMessage('Username can only contain letters, numbers, underscores, hyphens, and spaces'),
   
   body('email')
     .isEmail()
@@ -57,8 +57,8 @@ const validateProfileUpdate = [
     .trim()
     .isLength({ min: 3, max: 30 })
     .withMessage('Username must be between 3 and 30 characters')
-    .matches(/^[a-zA-Z0-9_-]+$/)
-    .withMessage('Username can only contain letters, numbers, underscores, and hyphens'),
+  .matches(/^[a-zA-Z0-9 _-]+$/)
+  .withMessage('Username can only contain letters, numbers, underscores, hyphens, and spaces'),
   
   body('bio')
     .optional()

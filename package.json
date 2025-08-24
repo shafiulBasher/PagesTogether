@@ -1,0 +1,21 @@
+{
+  "name": "pagestogether",
+  "version": "1.0.0",
+  "description": "Book Reading Community - Full Stack Application",
+  "main": "server/index.js",
+  "scripts": {
+    "dev": "concurrently \"npm run server\" \"npm run client\"",
+    "server": "cd server && npm run dev",
+    "client": "cd client && npm start",
+    "build": "cd client && npm run build",
+    "test": "echo \"Error: no test specified\" && exit 1",
+    "install-all": "npm install && cd server && npm install && cd ../client && npm install",
+    "seed": "cd server && node seed.js"
+  },
+  "keywords": ["books", "reading", "community", "mern", "react", "nodejs"],
+  "author": "PagesTogether Team",
+  "license": "MIT",
+  "devDependencies": {
+    "concurrently": "^8.2.2"
+  }
+}

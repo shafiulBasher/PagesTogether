@@ -71,8 +71,6 @@ npm run dev
 npm start
 ```
 
-5. Open your browser and navigate to `http://localhost:3000`
-
 ## Usage
 
 ### Profile Page
@@ -99,7 +97,10 @@ When adding books, you can use these sample cover URLs:
 - The Hobbit: `https://covers.openlibrary.org/b/isbn/9780544003415-M.jpg`
 - 1984: `https://covers.openlibrary.org/b/isbn/9780451524935-M.jpg`
 
-## Project Structure
+
+REACT_APP_API_URL=relative
+
+This will use the CRA proxy (configured in `client/package.json`) so requests go to the backend on `http://localhost:5000` without hardcoding the host.
 
 ```
 PagesTogether/

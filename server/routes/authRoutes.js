@@ -12,7 +12,8 @@ const {
 
 // Generate JWT token helper
 const generateToken = (userId) => {
-  return jwt.sign({ userId }, process.env.JWT_SECRET, {
+  const JWT_SECRET = process.env.JWT_SECRET || 'dev-secret-key';
+  return jwt.sign({ userId }, JWT_SECRET, {
     expiresIn: process.env.NODE_ENV === 'production' ? '7d' : '30d'
   });
 };
@@ -34,7 +35,8 @@ router.post('/register', validateRegister, authController.register);
 router.post('/login', validateLogin, authController.login);
 router.post('/logout', authController.logout);
 router.get('/me', authenticate, authController.getCurrentUser);
-router.post('/refresh-token', authenticate, authController.refreshToken);
+// Allow refresh-token without explicit authenticate middleware; controller will validate cookies/JWT
+router.post('/refresh-token', authController.refreshToken);
 
 // Password Reset Routes
 router.post('/forgot-password', validatePasswordResetRequest, authController.requestPasswordReset);
@@ -55,7 +57,8 @@ router.get('/status', (req, res) => {
     }
     
     if (token) {
-      const decoded = jwt.verify(token, process.env.JWT_SECRET);
+  const JWT_SECRET = process.env.JWT_SECRET || 'dev-secret-key';
+  const decoded = jwt.verify(token, JWT_SECRET);
       isAuthenticated = true;
     }
   } catch (error) {

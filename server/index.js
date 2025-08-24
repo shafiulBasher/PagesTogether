@@ -12,6 +12,8 @@ const cookieParser = require('cookie-parser');
 dotenv.config();
 
 const app = express();
+// Disable etags for APIs to avoid 304 with stale bodies
+app.set('etag', false);
 
 // Trust proxy for secure cookies in production
 if (process.env.NODE_ENV === 'production') {
@@ -21,14 +23,15 @@ if (process.env.NODE_ENV === 'production') {
 // Middleware
 app.use(helmet({
   crossOriginEmbedderPolicy: false,
-  crossOriginResourcePolicy: { policy: "cross-origin" },
+  crossOriginResourcePolicy: { policy: 'cross-origin' },
   contentSecurityPolicy: {
     directives: {
       defaultSrc: ["'self'"],
-      styleSrc: ["'self'", "'unsafe-inline'", "https://fonts.googleapis.com"],
-      fontSrc: ["'self'", "https://fonts.gstatic.com"],
-      imgSrc: ["'self'", "data:", "https:", "http://localhost:5000", "http://localhost:3000", "http://localhost:3001"],
-      scriptSrc: ["'self'"]
+      styleSrc: ["'self'", "'unsafe-inline'", 'https://fonts.googleapis.com'],
+      fontSrc: ["'self'", 'https://fonts.gstatic.com'],
+      imgSrc: ["'self'", 'data:', 'https:', 'http://localhost:5000', 'http://127.0.0.1:5000', 'http://localhost:3000', 'http://127.0.0.1:3000', 'http://localhost:3001'],
+      scriptSrc: ["'self'"],
+      connectSrc: ["'self'", 'http://localhost:5000', 'http://127.0.0.1:5000']
     }
   }
 }));
@@ -37,14 +40,23 @@ app.use(morgan('combined'));
 app.use(cookieParser());
 
 app.use(cors({
-  origin: process.env.NODE_ENV === 'production' ? 'your-production-domain.com' : ['http://localhost:3000', 'http://localhost:3001'],
+  origin: process.env.NODE_ENV === 'production' ? 'your-production-domain.com' : ['http://localhost:3000', 'http://127.0.0.1:3000', 'http://localhost:3001', 'http://127.0.0.1:3001'],
   credentials: true,
-  methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
+  methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
   allowedHeaders: ['Content-Type', 'Authorization']
 }));
 
 app.use(express.json({ limit: '10mb' }));
 app.use(express.urlencoded({ extended: true, limit: '10mb' }));
+
+// Prevent caching for API responses to ensure fresh membership state
+app.use('/api', (req, res, next) => {
+  res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate');
+  res.setHeader('Pragma', 'no-cache');
+  res.setHeader('Expires', '0');
+  res.setHeader('Surrogate-Control', 'no-store');
+  next();
+});
 
 // Session configuration
 app.use(session({
@@ -56,10 +68,10 @@ app.use(session({
     touchAfter: 24 * 3600 // lazy session update
   }),
   cookie: {
-    secure: process.env.NODE_ENV === 'production',
+  secure: process.env.NODE_ENV === 'production',
     httpOnly: true,
     maxAge: 7 * 24 * 60 * 60 * 1000, // 7 days
-    sameSite: 'strict'
+  sameSite: process.env.NODE_ENV === 'production' ? 'strict' : 'lax'
   }
 }));
 
@@ -68,15 +80,38 @@ const authRoutes = require('./routes/authRoutes');
 const userRoutes = require('./routes/userRoutes');
 const bookRoutes = require('./routes/bookRoutes');
 const uploadRoutes = require('./routes/uploadsRoutes');
+const groupRoutes = require('./routes/groupRoutes');
+const groupPostRoutes = require('./routes/groupPostRoutes');
+const seedRoutes = require('./routes/seedRoutes');
+const socialRoutes = require('./routes/socialRoutes');
+const { router: notificationRoutes } = require('./routes/notificationRoutes');
 
 // Import authentication middleware
 const { authenticate } = require('./middleware/auth');
 
 // Serve static files for uploads with proper CORS headers
 app.use('/uploads', (req, res, next) => {
-  res.header('Access-Control-Allow-Origin', process.env.NODE_ENV === 'production' ? 'your-production-domain.com' : 'http://localhost:3000');
+  const origin = req.headers.origin;
+  const devAllowed = ['http://localhost:3000', 'http://127.0.0.1:3000', 'http://localhost:3001'];
+  const isDev = process.env.NODE_ENV !== 'production';
+  if (!process.env.NODE_ENV || isDev) {
+    if (origin && devAllowed.includes(origin)) {
+      res.header('Access-Control-Allow-Origin', origin);
+    } else {
+      res.header('Access-Control-Allow-Origin', 'http://localhost:3000');
+    }
+  } else {
+    res.header('Access-Control-Allow-Origin', 'your-production-domain.com');
+  }
+  res.header('Vary', 'Origin');
   res.header('Access-Control-Allow-Credentials', 'true');
   res.header('Cross-Origin-Resource-Policy', 'cross-origin');
+  // Handle preflight
+  if (req.method === 'OPTIONS') {
+    res.header('Access-Control-Allow-Methods', 'GET, OPTIONS');
+    res.header('Access-Control-Allow-Headers', 'Content-Type, Authorization');
+    return res.sendStatus(204);
+  }
   next();
 }, express.static('uploads'));
 
@@ -85,6 +120,19 @@ app.use('/api/auth', authRoutes);
 app.use('/api/users', authenticate, userRoutes);
 app.use('/api/books', authenticate, bookRoutes);
 app.use('/api/uploads', uploadRoutes);
+app.use('/api/groups', groupRoutes);
+app.use('/api/groups', authenticate, groupPostRoutes);
+app.use('/api/social', authenticate, socialRoutes);
+
+// Notification routes (protected)
+app.use('/api/notifications', notificationRoutes);
+
+// Seed routes (development only - no auth required)
+if (process.env.NODE_ENV !== 'production') {
+  const seedRoutes = require('./routes/seedRoutes');
+  app.use('/api/seed', seedRoutes);
+}
+app.use('/api/seed', seedRoutes);
 
 // Health check route
 app.get('/api/health', (req, res) => {
@@ -162,8 +210,31 @@ mongoose.connect(MONGO_URI)
 
 // Start server
 const PORT = process.env.PORT || 5000;
-app.listen(PORT, () => {
-  console.log(`Server running on port ${PORT}`);
+// Remove HOST binding to let it bind to all interfaces
+console.log(`Attempting to start server on port ${PORT}`);
+
+const server = app.listen(PORT, () => {
+  console.log(`✓ Server successfully started!`);
+  console.log(`✓ Server running on http://localhost:${PORT}`);
+  console.log(`✓ Health check: http://localhost:${PORT}/api/health`);
+  console.log(`✓ Server bound to port: ${PORT}`);
+  console.log(`✓ Server is now listening on port ${PORT}`);
+});
+
+// Handle server errors
+server.on('error', (err) => {
+  console.error('❌ Server error:', err);
+  if (err.code === 'EADDRINUSE') {
+    console.error(`❌ Port ${PORT} is already in use. Please try a different port.`);
+    process.exit(1);
+  } else if (err.code === 'EACCES') {
+    console.error(`❌ Permission denied to bind to port ${PORT}. Try using a different port or run as administrator.`);
+    process.exit(1);
+  }
+});
+
+server.on('listening', () => {
+  console.log(`✓ Server is now listening on port ${PORT}`);
 });
 
 module.exports = app; 
